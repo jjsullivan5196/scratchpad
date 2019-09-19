@@ -1,0 +1,11 @@
+[package]
+name = "hello-rk"
+version = "0.1.0"
+authors = ["John Sullivan <jsullivan@csumb.edu>"]
+
+[dependencies]
+serde = "1.0"
+serde_derive = "1.0"
+rocket = "0.3.10"
+rocket_contrib = "0.3.10"
+rocket_codegen = "0.3.10"

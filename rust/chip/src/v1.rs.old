@@ -1,0 +1,119 @@
+extern crate byteorder;
+use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
+type NE = NativeEndian;
+
+// Interpreter memory map
+static RF: usize = 0;  // (0x0000-0x000F) Registers V0-VF
+static RT: usize = 16; // (0x0010-0x0011) Delay/Sound Timers
+static RI: usize = 18; // (0x0012-0x0013) Address Register
+static PC: usize = 20; // (0x0014-0x0015) Program Counter
+static SP: usize = 22; // (0x0016-0x0017) Stack Pointer
+static SB: usize = 24; // (0x0018-0x0048) Stack Base/Range
+
+/// Any implementation of Chip provides methods to
+/// run CHIP8 opcodes and provide interpreter/RAM
+/// state
+trait Chip {
+    /// Read 2 words of memory
+    fn r16(&self, usize) -> u16;
+    /// Write 2 words of memory
+    fn w16(&mut self, usize, u16);
+    /// Return from subroutine
+    fn sub_return(&mut self);
+    /// Call subroutine
+    fn sub_call(&mut self, u16);
+    /// Skip instruction
+    fn skip(&mut self);
+}
+macro_rules! run_op {
+    (($m:ident, $code:ident), $operation:block) => { |$m: &mut Chip, $code: u16| $operation }
+}
+
+/// RAM practically is state, so impl uses an array
+impl Chip for [u8; 4096] {
+    #[inline]
+    fn r16(&self, l: usize) -> u16 {
+        let mut loc = &self[l..];
+        loc.read_u16::<NE>().unwrap()
+    }
+    #[inline]
+    fn w16(&mut self, l: usize, v: u16) {
+        let mut loc = &mut self[l..]; 
+        loc.write_u16::<NE>(v);
+    }
+    #[inline]
+    fn sub_return(&mut self) {
+        let stackp = self.r16(SP);
+        let raddr = self.r16(stackp as usize);
+        self.w16(PC, raddr);
+        self.w16(SP, stackp - 2);
+    }
+    #[inline]
+    fn sub_call(&mut self, sub: u16) {
+        let faddr = self.r16(SP);
+        let progc = self.r16(PC);
+        self.w16(faddr as usize, progc);
+        self.w16(SP, faddr + 2);
+        self.w16(PC, sub);
+    }
+    #[inline]
+    fn skip(&mut self) {
+        let progc = self.r16(PC);
+        self.w16(PC, progc + 2);
+    }
+}
+
+fn decode(code: u16) -> Option<fn(&mut Chip, u16)> {
+    match code & 0xF000 {
+        0x0000 => match code & 0x00FF {
+            0x00E0 => Some(run_op!((m, op), {})), // 0x00E0: disp_clear()
+            0x00EE => Some(run_op!((m, op), { m.sub_return(); })), // 0x00EE: return
+            _ => None
+        },
+        0x1000 => Some(run_op!((m, op), { m.w16(PC, op & 0x0FFF); })), // 0x1NNN: goto NNN
+        0x2000 => Some(run_op!((m, op), { m.sub_call(op & 0x0FFF); })), // 0x2NNN: *(0xNNN)()
+        0x3000 => Some(run_op!((m, op), {})), // 0x3XNN: if(VX==NN) goto PC+2
+        0x4000 => Some(run_op!((m, op), {})), // 0x4XNN: if(VX!=NN) goto PC+2
+        0x5000 => Some(run_op!((m, op), {})), // 0x5XY0: if(VX==VY) goto PC+2
+        0x6000 => Some(run_op!((m, op), {})), // 0x6XNN: VX = NN
+        0x7000 => Some(run_op!((m, op), {})), // 0x7XNN: VX += NN
+        0x8000 => match code & 0x000F {
+            0x0000 => Some(run_op!((m, op), {})), // 0x8XY0: VX = VY
+            0x0001 => Some(run_op!((m, op), {})), // 0x8XY1: VX = VX|VY
+            0x0002 => Some(run_op!((m, op), {})), // 0x8XY2: VX = VX&VY
+            0x0003 => Some(run_op!((m, op), {})), // 0x8XY3: VX = VX^VY
+            0x0004 => Some(run_op!((m, op), {})), // 0x8XY4: VX += VY
+            0x0005 => Some(run_op!((m, op), {})), // 0x8XY5: VX -= VY
+            0x0006 => Some(run_op!((m, op), {})), // 0x8XY6: VX = VY>>1
+            0x0007 => Some(run_op!((m, op), {})), // 0x8XY7: VX = VX-VY
+            0x000E => Some(run_op!((m, op), {})), // 0x8XYE: VX = VY<<1
+            _ => None
+        },
+        0x9000 => Some(run_op!((m, op), {})), // 0x9XY0: if(VX!=VY) goto PC+2
+        0xA000 => Some(run_op!((m, op), {})), // 0xANNN: I = NNN
+        0xB000 => Some(run_op!((m, op), {})), // 0xBNNN: PC = V0+NNN
+        0xC000 => Some(run_op!((m, op), {})), // 0xCXNN: VX = rand()&NN
+        0xD000 => Some(run_op!((m, op), {})), // 0xDXYN: draw(VX,VY,N)
+        0xE000 => match code & 0x00FF {
+            0x009E => Some(run_op!((m, op), {})), // 0xEX9E: if(key()==VX) goto PC+2
+            0x00A1 => Some(run_op!((m, op), {})), // 0xEXA1: if(key()!=VX) goto PC+2
+            _ => None
+        },
+        0xF000 => match code & 0x00FF {
+            0x0007 => Some(run_op!((m, op), {})), // 0xFX07: VX = get_delay()
+            0x000A => Some(run_op!((m, op), {})), // 0xFX0A: VX = get_key()
+            0x0015 => Some(run_op!((m, op), {})), // 0xFX15: delay_timer(VX)
+            0x0018 => Some(run_op!((m, op), {})), // 0xFX18: sound_timer(VX)
+            0x001E => Some(run_op!((m, op), {})), // 0xFX1E: I += VX
+            0x0029 => Some(run_op!((m, op), {})), // 0xFX29: I = sprite_addr[VX]
+            0x0033 => Some(run_op!((m, op), {})), // 0xFX33: BCD...
+            0x0055 => Some(run_op!((m, op), {})), // 0xFX55: reg_dump(VX,&I)
+            0x0065 => Some(run_op!((m, op), {})), // 0xFX65: reg_load(VX,&I)
+            _ => None
+        },
+        _ => None
+    }
+}
+
+fn main() {
+}
