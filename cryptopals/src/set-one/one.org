@@ -1,0 +1,109 @@
+* [[https://cryptopals.com/sets/1/challenges/1][Convert hex to base64]]
+
+** Notes
+[[https://en.wikipedia.org/wiki/Base64][Wikipedia - Base64]]
+
+*** Problem
+Convert a hex string, such as
+
+~49276d206b696c6c696e6720796f757220627261696e206c696b65206120706f69736f6e6f7573206d757368726f6f6d~
+
+into a base64 string
+
+~SSdtIGtpbGxpbmcgeW91ciBicmFpbiBsaWtlIGEgcG9pc29ub3VzIG11c2hyb29t~
+
+Represent both strings as collections of bytes
+
+*** Steps to solve
+
+ - Group bytes (octets) into 3...1-tuples
+ - Produce 4-tuples of sextets from tuples as bytes
+   * Create sextet from two octets
+ - Output sequence
+
+** Code
+#+BEGIN_SRC clojure :results silent
+  (ns set-one.one)
+#+END_SRC
+
+*** Mappings
+Since base64 doesn't have an in-machine representation, it's helpful to have a
+way to display an encoded message as a string. These maps represent the pairs
+of base64 sextets and digits in ASCII.
+
+#+BEGIN_SRC clojure :results silent
+  (require '[clojure.set :refer [map-invert]])
+
+  (def to-digit (into {}
+                      (map-indexed vector
+                                   (concat
+                                     (map char
+                                          (concat
+                                            (range (int \A) (inc (int \Z)))
+                                            (range (int \a) (inc (int \z)))
+                                            (range (int \0) (inc (int \9)))))
+                                     [\+ \/ \=]))))
+
+  (def to-hex (map-invert to-digit))
+#+END_SRC
+
+*** Bitshifting
+To convert 3 octets into 4 sexets, we need to be able to take bits from two
+numbers by ratios.
+
+#+BEGIN_SRC clojure :results silent
+  (def *byte-max* 0xff)
+#+END_SRC
+
+n-tet function from [[https://gist.github.com/xsc/5518194][here]]
+
+#+BEGIN_SRC clojure :results silent
+  (defn n-tet
+    "Given two m-bit numbers `a` and `b` create an n-bit number by taking the `bits-of-a`
+     lowest bits of `a` and the `(n - bits-of-a)` hightest bits of `b`."
+    [n m a b bits-of-a]
+    (let [bits-of-b (- n bits-of-a)
+          mask-a (int (Math/pow 2 bits-of-a))]
+      (+ (bit-shift-left (mod a mask-a) bits-of-b)
+         (bit-shift-right b (- m bits-of-b)))))
+
+  (def sextet (partial n-tet 6 8))
+  (def octet (partial n-tet 8 6))
+#+END_SRC
+
+*** Encoding
+The encoding can be expressed as a transformation over a byte sequence
+
+#+BEGIN_SRC clojure :results silent
+  (defn base64-encode-octs
+    [[a b c]]
+    [(sextet 0 a 0)
+     (sextet a (or b 0) 2)
+     (if-not (or b c) 64 (sextet (or b 0) (or c 0) 4))
+     (if-not c 64 (sextet c 0 6))])
+
+  (def base64-encode
+    (comp (partition-all 3)
+          (map base64-encode-octs)))
+#+END_SRC
+
+#+BEGIN_SRC clojure :results pp
+  (def my-msg "Hello new fun world")
+
+  (def encoded
+    (->> my-msg
+         (.getBytes)
+         (into [] base64-encode)
+         (flatten)))
+
+  (def encoded-chars
+    (->> encoded
+         (map to-digit)))
+
+  (apply str encoded-chars)
+#+END_SRC
+
+#+RESULTS:
+: "SGVsbG8gbmV3IGZ1biB3b3JsZA=="
+
+
